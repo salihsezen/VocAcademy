@@ -1321,13 +1321,21 @@
         class StorageManager {
             constructor() {
                 this.STORAGE_KEY = 'findTheWordApp';
+                this.WORDS_CSV_PATH = 'Words.csv';
                 this.initData();
             }
 
-            initData() {
+            async initData() {
                 if (!this.getAllData()) {
-                    const defaultData = {
-                        words: [
+                    // Load words from CSV file first
+                    let words = [];
+                    try {
+                        const csvData = await this.loadWordsFromCSV();
+                        words = csvData;
+                    } catch (error) {
+                        console.warn('Could not load Words.csv, using default words:', error);
+                        // Fallback to default words if CSV loading fails
+                        words = [
                             { id: 1, level: 'A1-A2', word: 'hello', pos: 'interjection', turkish: 'merhaba', en_meaning: 'used as a greeting', en_example: 'Hello, how are you?' },
                             { id: 2, level: 'A1-A2', word: 'thank you', pos: 'expression', turkish: 'teşekkür ederim', en_meaning: 'expression of gratitude', en_example: 'Thank you for your help.' },
                             { id: 3, level: 'A1-A2', word: 'please', pos: 'adverb', turkish: 'lütfen', en_meaning: 'used to make requests polite', en_example: 'Please pass the salt.' },
@@ -1335,7 +1343,11 @@
                             { id: 5, level: 'B1-B2', word: 'beneath', pos: 'preposition', turkish: 'altında', en_meaning: 'in or to a lower position', en_example: 'The cat is beneath the table.' },
                             { id: 6, level: 'C1', word: 'ubiquitous', pos: 'adjective', turkish: 'her yerde bulunan', en_meaning: 'present or found everywhere', en_example: 'Smartphones have become ubiquitous.' },
                             { id: 7, level: 'C1', word: 'pragmatic', pos: 'adjective', turkish: 'pragmatik', en_meaning: 'dealing with things sensibly', en_example: 'We need a pragmatic solution.' }
-                        ],
+                        ];
+                    }
+
+                    const defaultData = {
+                        words: words,
                         profiles: [
                             { id: 'admin', username: 'ssezen', role: 'admin', password: 'admin123', must_change_password: false },
                             { id: 'user1', username: 'student1', role: 'user', password: 'pass123', must_change_password: false }
@@ -1345,6 +1357,122 @@
                     };
                     this.saveAllData(defaultData);
                 }
+            }
+
+            async loadWordsFromCSV() {
+                try {
+                    console.log('Loading Words.csv...');
+                    const response = await fetch(this.WORDS_CSV_PATH);
+                    console.log('Fetch response:', response);
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    const csvText = await response.text();
+                    console.log('CSV text received:', csvText);
+                    const parsedWords = this.parseCSV(csvText);
+                    console.log('Parsed words:', parsedWords);
+                    return parsedWords;
+                } catch (error) {
+                    console.error('Error loading Words.csv:', error);
+                    throw error;
+                }
+            }
+
+            parseCSV(csvText) {
+                const lines = csvText.trim().split('\n').filter(line => line.trim());
+                if (lines.length === 0) {
+                    return [];
+                }
+
+                // Parse header row
+                const headers = this.parseCSVLine(lines[0]).map(h => h.trim().toLowerCase());
+
+                // Map expected headers to match CSV column headers
+                const headerMap = {
+                    'id': headers.findIndex(h => h === 'id'),
+                    'level': headers.findIndex(h => h === 'level'),
+                    'word': headers.findIndex(h => h === 'word'),
+                    'pos': headers.findIndex(h => h === 'type'), // 'Type' column maps to 'pos'
+                    'turkish': headers.findIndex(h => h === 'turkish'),
+                    'en_meaning': headers.findIndex(h => h.includes('english meaning') || h === 'english meaning'),
+                    'en_example': headers.findIndex(h => h.includes('english example') || h === 'english example')
+                };
+
+                const words = [];
+
+                // Process data rows
+                for (let i = 1; i < lines.length; i++) {
+                    try {
+                        const values = this.parseCSVLine(lines[i]);
+
+                        if (values.length >= 5) {
+                            const word = {
+                                id: parseInt(values[headerMap.id] !== -1 ? values[headerMap.id] : i) || i,
+                                level: (headerMap.level !== -1 ? values[headerMap.level] : 'A1-A2') || 'A1-A2',
+                                word: (headerMap.word !== -1 ? values[headerMap.word] : '') || '',
+                                pos: (headerMap.pos !== -1 ? values[headerMap.pos] : '') || '',
+                                turkish: (headerMap.turkish !== -1 ? values[headerMap.turkish] : '') || '',
+                                en_meaning: (headerMap.en_meaning !== -1 ? values[headerMap.en_meaning] : '') || '',
+                                en_example: (headerMap.en_example !== -1 ? values[headerMap.en_example] : '') || ''
+                            };
+
+                            // Validate required fields
+                            if (word.word && word.turkish) {
+                                words.push(word);
+                            } else {
+                                console.warn(`Skipping row ${i + 1}: Missing required fields (word or turkish)`);
+                            }
+                        } else {
+                            console.warn(`Skipping row ${i + 1}: Insufficient columns (${values.length})`);
+                        }
+                    } catch (error) {
+                        console.error(`Error processing row ${i + 1}:`, error);
+                    }
+                }
+
+                return words;
+            }
+
+            parseCSVLine(line) {
+                const result = [];
+                let current = '';
+                let inQuotes = false;
+                let i = 0;
+
+                while (i < line.length) {
+                    const char = line[i];
+
+                    if (char === '"') {
+                        if (inQuotes && line[i + 1] === '"') {
+                            // Escaped quote
+                            current += '"';
+                            i += 2;
+                        } else {
+                            // Toggle quote state
+                            inQuotes = !inQuotes;
+                            i++;
+                        }
+                    } else if (char === ',' && !inQuotes) {
+                        // Field separator
+                        result.push(current.trim());
+                        current = '';
+                        i++;
+                    } else {
+                        current += char;
+                        i++;
+                    }
+                }
+
+                // Add the last field
+                result.push(current.trim());
+
+                // Remove surrounding quotes from each field
+                return result.map(field => {
+                    if (field.startsWith('"') && field.endsWith('"')) {
+                        return field.slice(1, -1).replace(/""/g, '"');
+                    }
+                    return field;
+                });
             }
 
             getAllData() {
@@ -3626,8 +3754,9 @@
             }
         }
 
-        // Initialize theme on page load
-        window.addEventListener('load', function() {
+        // Initialize theme on page load and storage asynchronously
+        window.addEventListener('load', async function() {
+            await initializeStorage();
             initTheme();
             loadDecks();
             loadReports();
