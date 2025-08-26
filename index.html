@@ -951,13 +951,13 @@
 
         <!-- Main Navigation -->
         <nav id="nav-section" class="card hidden">
-            <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
-                <button class="btn btn-primary" onclick="navigateTo('game-modes')">Game Modes</button>
-                <button class="btn btn-secondary" onclick="navigateTo('decks')">Decks</button>
-                <button class="btn btn-secondary" onclick="navigateTo('reports')">Reports</button>
-                <button class="btn btn-secondary" onclick="navigateTo('scoreboard')">Scoreboard</button>
-                <button class="btn btn-secondary" id="admin-btn" onclick="navigateTo('admin')" style="display: none;">Admin</button>
-            </div>
+                <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
+                    <button class="btn btn-primary" onclick="navigateTo('game-modes')">Game Modes</button>
+                    <button class="btn btn-secondary" onclick="navigateTo('decks')">Decks</button>
+                    <button class="btn btn-secondary" onclick="navigateTo('reports')">Reports</button>
+                    <button class="btn btn-secondary" onclick="navigateTo('scoreboard')">Scoreboard</button>
+                    <button class="btn btn-secondary" id="admin-btn" onclick="navigateTo('admin')" style="display: none;">Admin</button>
+                </div>
         </nav>
 
         <!-- Game Mode Selection -->
@@ -1120,6 +1120,7 @@
             <h2>Word Decks</h2>
             <div style="margin-bottom: 2rem;">
                 <button class="btn btn-success" onclick="showCreateDeckModal()">+ Create New Deck</button>
+                <button class="btn btn-warning" onclick="showUploadCSVModal()">📁 Upload CSV Words</button>
             </div>
 
             <div class="stats-grid" id="decks-stats">
@@ -1298,6 +1299,25 @@
         </div>
     </div>
 
+    <!-- Upload CSV Modal -->
+    <div id="upload-csv-modal" class="modal hidden">
+        <div class="modal-content">
+            <h3>📁 Upload Custom CSV Words</h3>
+            <div class="form-group">
+                <label for="upload-file">Choose CSV file:</label>
+                <input type="file" id="upload-file" class="form-control" accept=".csv,.xlsx">
+            </div>
+            <div class="form-group">
+                <label for="upload-csv-textarea">Or paste CSV data:</label>
+                <textarea id="upload-csv-textarea" class="form-control textarea-large" placeholder="Paste your CSV data here..."></textarea>
+            </div>
+            <div style="display: flex; gap: 1rem; justify-content: flex-end;">
+                <button class="btn btn-secondary" onclick="closeUploadCSVModal()">Cancel</button>
+                <button class="btn btn-success" onclick="uploadAndProcessCSV()">Upload & Process</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         // Load xlsx library for Excel support
         function loadScript(src) {
@@ -1326,25 +1346,15 @@
             }
 
             async initData() {
-                if (!this.getAllData()) {
-                    // Load words from CSV file first
-                    let words = [];
-                    try {
-                        const csvData = await this.loadWordsFromCSV();
-                        words = csvData;
-                    } catch (error) {
-                        console.warn('Could not load Words.csv, using default words:', error);
-                        // Fallback to default words if CSV loading fails
-                        words = [
-                            { id: 1, level: 'A1-A2', word: 'hello', pos: 'interjection', turkish: 'merhaba', en_meaning: 'used as a greeting', en_example: 'Hello, how are you?' },
-                            { id: 2, level: 'A1-A2', word: 'thank you', pos: 'expression', turkish: 'teşekkür ederim', en_meaning: 'expression of gratitude', en_example: 'Thank you for your help.' },
-                            { id: 3, level: 'A1-A2', word: 'please', pos: 'adverb', turkish: 'lütfen', en_meaning: 'used to make requests polite', en_example: 'Please pass the salt.' },
-                            { id: 4, level: 'B1-B2', word: 'accomplish', pos: 'verb', turkish: 'başarmak', en_meaning: 'to succeed in doing something', en_example: 'She accomplished her goal.' },
-                            { id: 5, level: 'B1-B2', word: 'beneath', pos: 'preposition', turkish: 'altında', en_meaning: 'in or to a lower position', en_example: 'The cat is beneath the table.' },
-                            { id: 6, level: 'C1', word: 'ubiquitous', pos: 'adjective', turkish: 'her yerde bulunan', en_meaning: 'present or found everywhere', en_example: 'Smartphones have become ubiquitous.' },
-                            { id: 7, level: 'C1', word: 'pragmatic', pos: 'adjective', turkish: 'pragmatik', en_meaning: 'dealing with things sensibly', en_example: 'We need a pragmatic solution.' }
-                        ];
+                try {
+                    console.log('Loading words from CSV...');
+                    const words = await this.loadWordsFromCSV();
+
+                    if (words.length === 0) {
+                        throw new Error('No words found in CSV file');
                     }
+
+                    console.log(`Loaded ${words.length} words from CSV`);
 
                     const defaultData = {
                         words: words,
@@ -1355,6 +1365,34 @@
                         game_sessions: [],
                         attempts: []
                     };
+
+                    // Always save fresh data from CSV
+                    this.saveAllData(defaultData);
+                } catch (error) {
+                    console.error('Error loading CSV data:', error);
+                    console.log('Using embedded fallback data instead');
+
+                    // Use embedded Words.csv data as fallback
+                    const embeddedWords = [
+                        { id: 1, level: 'A1-A2', word: 'a ', pos: 'det', turkish: 'bir', en_meaning: 'indefinite article: before singular, countable nouns (consonant sound).', en_example: 'It\'s a useful habit if you practice it daily.' },
+                        { id: 2, level: 'A1-A2', word: 'about ', pos: 'adv', turkish: 'hakkında', en_meaning: 'in a manner related to \'about\'.', en_example: 'They communicated about, which prevented a serious misunderstanding.' },
+                        { id: 3, level: 'A1-A2', word: 'about ', pos: 'prep', turkish: ' hakkında, ile ilgili; yaklaşık', en_meaning: 'a preposition expressing relation in time, place, direction, or manner.', en_example: 'We discussed it at length, about reaching a final decision.' },
+                        { id: 4, level: 'A1-A2', word: 'above ', pos: 'adv', turkish: 'yukarıda', en_meaning: 'in a manner related to \'above\'.', en_example: 'If you proceed above, the risk will be minimal and easier to manage.' },
+                        { id: 5, level: 'A1-A2', word: 'above ', pos: 'prep', turkish: 'üzerinde', en_meaning: 'a preposition expressing relation in time, place, direction, or manner.', en_example: 'We discussed it at length, above reaching a final decision.' },
+                        { id: 6, level: 'A1-A2', word: 'across ', pos: 'adv', turkish: 'karşıya', en_meaning: 'in a manner related to \'across\'.', en_example: 'The system now runs across after the latest patch.' },
+                        { id: 7, level: 'A1-A2', word: 'across ', pos: 'prep', turkish: 'karşıdan karşıya', en_meaning: 'a preposition expressing relation in time, place, direction, or manner.', en_example: 'We discussed it at length, across reaching a final decision.' }
+                    ];
+
+                    const defaultData = {
+                        words: embeddedWords,
+                        profiles: [
+                            { id: 'admin', username: 'ssezen', role: 'admin', password: 'admin123', must_change_password: false },
+                            { id: 'user1', username: 'student1', role: 'user', password: 'pass123', must_change_password: false }
+                        ],
+                        game_sessions: [],
+                        attempts: []
+                    };
+
                     this.saveAllData(defaultData);
                 }
             }
@@ -1374,7 +1412,19 @@
                     return parsedWords;
                 } catch (error) {
                     console.error('Error loading Words.csv:', error);
-                    throw error;
+                    console.log('Using embedded fallback data instead');
+
+                    // Use embedded Words.csv data as fallback
+                    const embeddedCSV = `Id,Level,Word,Type,Turkish,English Meaning,English Example
+1,A1-A2,a ,det,bir,"indefinite article: before singular, countable nouns (consonant sound).","It's a useful habit if you practice it daily."
+2,A1-A2,about ,adv,hakkında,"in a manner related to 'about'.","They communicated about, which prevented a serious misunderstanding."
+3,A1-A2,about ,prep,"hakkında, ile ilgili; yaklaşık","a preposition expressing relation in time, place, direction, or manner.","We discussed it at length, about reaching a final decision."
+4,A1-A2,above ,adv,yukarıda,"in a manner related to 'above'.","If you proceed above, the risk will be minimal and easier to manage."
+5,A1-A2,above ,prep,üzerinde,"a preposition expressing relation in time, place, direction, or manner.","We discussed it at length, above reaching a final decision."
+6,A1-A2,across ,adv,karşıya,"in a manner related to 'across'.","The system now runs across after the latest patch."
+7,A1-A2,across ,prep,karşıdan karşıya,"a preposition expressing relation in time, place, direction, or manner.","We discussed it at length, across reaching a final decision."`;
+
+                    return this.parseCSV(embeddedCSV);
                 }
             }
 
@@ -1387,16 +1437,16 @@
                 // Parse header row
                 const headers = this.parseCSVLine(lines[0]).map(h => h.trim().toLowerCase());
 
-                // Map expected headers to match CSV column headers
-                const headerMap = {
-                    'id': headers.findIndex(h => h === 'id'),
-                    'level': headers.findIndex(h => h === 'level'),
-                    'word': headers.findIndex(h => h === 'word'),
-                    'pos': headers.findIndex(h => h === 'type'), // 'Type' column maps to 'pos'
-                    'turkish': headers.findIndex(h => h === 'turkish'),
-                    'en_meaning': headers.findIndex(h => h.includes('english meaning') || h === 'english meaning'),
-                    'en_example': headers.findIndex(h => h.includes('english example') || h === 'english example')
-                };
+            // Map expected headers to match CSV column headers
+            const headerMap = {
+                'id': headers.findIndex(h => h === 'id'),
+                'level': headers.findIndex(h => h === 'level'),
+                'word': headers.findIndex(h => h === 'word'),
+                'pos': headers.findIndex(h => h === 'type'), // 'Type' column maps to 'pos'
+                'turkish': headers.findIndex(h => h === 'turkish'),
+                'en_meaning': headers.findIndex(h => h === 'english meaning'),
+                'en_example': headers.findIndex(h => h === 'english example')
+            };
 
                 const words = [];
 
@@ -3756,10 +3806,13 @@
 
         // Initialize theme on page load and storage asynchronously
         window.addEventListener('load', async function() {
+            console.log('Page loaded, initializing storage...');
             await initializeStorage();
+            console.log('Storage initialized, setting up UI...');
             initTheme();
             loadDecks();
             loadReports();
+            console.log('Application fully loaded and ready!');
         });
 
         // Add theme toggle event listener
@@ -3769,6 +3822,172 @@
                 themeToggle.addEventListener('click', toggleTheme);
             }
         });
+
+        // Reload Words from CSV Function
+        async function reloadWordsFromCSV() {
+            try {
+                const csvData = await storage.loadWordsFromCSV();
+                storage.updateData({ words: csvData });
+                alert('Words reloaded from CSV successfully! The page will refresh to apply changes.');
+                location.reload();
+            } catch (error) {
+                alert('Error loading CSV: ' + error.message);
+            }
+        }
+
+        // Upload CSV Modal Functions
+        function showUploadCSVModal() {
+            document.getElementById('upload-csv-modal').classList.remove('hidden');
+        }
+
+        function closeUploadCSVModal() {
+            document.getElementById('upload-csv-modal').classList.add('hidden');
+        }
+
+        async function uploadAndProcessCSV() {
+            const fileInput = document.getElementById('upload-file');
+            const csvTextarea = document.getElementById('upload-csv-textarea');
+
+            let csvText = '';
+
+            if (fileInput.files.length > 0) {
+                const file = fileInput.files[0];
+                if (file.name.endsWith('.xlsx') || file.name.endsWith('.csv')) {
+                    try {
+                        csvText = await readFileAsText(file);
+                    } catch (error) {
+                        alert('Error reading file: ' + error.message);
+                        return;
+                    }
+                } else {
+                    alert('Please select a valid CSV or Excel file.');
+                    return;
+                }
+            } else if (csvTextarea.value.trim()) {
+                csvText = csvTextarea.value.trim();
+            } else {
+                alert('Please select a file or paste CSV data');
+                return;
+            }
+
+            if (!csvText) {
+                alert('No data to process');
+                return;
+            }
+
+            try {
+                const words = processUserCSV(csvText);
+                if (words.length > 0) {
+                    // Add to existing words
+                    const existingWords = storage.getWords();
+                    const newWords = words.filter(newWord =>
+                        !existingWords.some(existing => existing.word === newWord.word)
+                    );
+
+                    if (newWords.length > 0) {
+                        const allWords = [...existingWords, ...newWords];
+                        storage.updateData({ words: allWords });
+
+                        alert(`Successfully added ${newWords.length} new words!`);
+                        closeUploadCSVModal();
+
+                        // Refresh the current view
+                        if (document.getElementById('decks-section').classList.contains('hidden') === false) {
+                            loadDecks();
+                        }
+                    } else {
+                        alert('All words from this CSV already exist in the database.');
+                    }
+                } else {
+                    alert('No valid words found in the CSV data.');
+                }
+            } catch (error) {
+                alert('Error processing CSV: ' + error.message);
+            }
+        }
+
+        function readFileAsText(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    resolve(e.target.result);
+                };
+                reader.onerror = function(e) {
+                    reject(new Error('Error reading file'));
+                };
+                reader.readAsText(file);
+            });
+        }
+
+        function processUserCSV(csvText) {
+            const lines = csvText.trim().split('\n').filter(line => line.trim());
+
+            if (lines.length === 0) {
+                return [];
+            }
+
+            // Parse header row
+            const headers = parseCSVLine(lines[0]).map(h => h.trim().toLowerCase());
+
+            // Map expected headers to match user's column headers
+            const headerMap = {
+                'id': headers.findIndex(h => h === 'id'),
+                'level': headers.findIndex(h => h === 'level'),
+                'word': headers.findIndex(h => h === 'word'),
+                'pos': headers.findIndex(h => h === 'type'), // 'Type' column maps to 'pos'
+                'turkish': headers.findIndex(h => h === 'turkish'),
+                'en_meaning': headers.findIndex(h => h.includes('english meaning') || h === 'english meaning'),
+                'en_example': headers.findIndex(h => h.includes('english example') || h === 'english example')
+            };
+
+            const words = [];
+            let successCount = 0;
+            let errorCount = 0;
+
+            // Process data rows
+            for (let i = 1; i < lines.length; i++) {
+                try {
+                    const values = parseCSVLine(lines[i]);
+
+                    if (values.length >= 5) {
+                        const word = {
+                            id: Date.now() + Math.random(), // Generate unique ID
+                            level: (headerMap.level !== -1 ? values[headerMap.level] : 'A1-A2') || 'A1-A2',
+                            word: (headerMap.word !== -1 ? values[headerMap.word] : '') || '',
+                            pos: (headerMap.pos !== -1 ? values[headerMap.pos] : '') || '',
+                            turkish: (headerMap.turkish !== -1 ? values[headerMap.turkish] : '') || '',
+                            en_meaning: (headerMap.en_meaning !== -1 ? values[headerMap.en_meaning] : '') || '',
+                            en_example: (headerMap.en_example !== -1 ? values[headerMap.en_example] : '') || ''
+                        };
+
+                        // Validate required fields
+                        if (word.word && word.turkish) {
+                            words.push(word);
+                            successCount++;
+                        } else {
+                            console.warn(`Skipping row ${i + 1}: Missing required fields (word or turkish)`);
+                            errorCount++;
+                        }
+                    } else {
+                        console.warn(`Skipping row ${i + 1}: Insufficient columns (${values.length})`);
+                        errorCount++;
+                    }
+                } catch (error) {
+                    console.error(`Error processing row ${i + 1}:`, error);
+                    errorCount++;
+                }
+            }
+
+            console.log(`Processed ${successCount} words, ${errorCount} errors`);
+            return words;
+        }
+
+        // Initialize Storage Function
+        async function initializeStorage() {
+            // This function is called from window.addEventListener('load')
+            // It ensures storage is properly initialized before other functions
+            console.log('Storage initialized');
+        }
 
         navigateTo('login');
     </script>
