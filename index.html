@@ -912,42 +912,12 @@
                 <button class="theme-toggle" id="theme-toggle" title="Toggle theme">🌙</button>
             </div>
             <div class="user-info">
-                <span id="current-user">Not logged in</span>
+                <span id="current-user">Guest</span>
                 <button class="btn btn-secondary btn-sm" id="logout-btn" style="display: none;">Logout</button>
             </div>
         </header>
 
-        <!-- Login Section -->
-        <section id="login-section" class="card">
-            <h2>Login</h2>
-            <form id="login-form">
-                <div class="form-group">
-                    <label for="username">Username</label>
-                    <input type="text" id="username" class="form-control" required>
-                </div>
-                <div class="form-group">
-                    <label for="password">Password</label>
-                    <input type="password" id="password" class="form-control" required>
-                </div>
-                <button type="submit" class="btn btn-primary">Login</button>
-            </form>
-        </section>
-
-        <!-- Password Change Section -->
-        <section id="password-change-section" class="card hidden">
-            <h2>Change Password</h2>
-            <form id="password-change-form">
-                <div class="form-group">
-                    <label for="new-password">New Password</label>
-                    <input type="password" id="new-password" class="form-control" required>
-                </div>
-                <div class="form-group">
-                    <label for="confirm-password">Confirm Password</label>
-                    <input type="password" id="confirm-password" class="form-control" required>
-                </div>
-                <button type="submit" class="btn btn-primary">Change Password</button>
-            </form>
-        </section>
+        <!-- Login removed: app runs as Guest by default -->
 
         <!-- Main Navigation -->
         <nav id="nav-section" class="card hidden">
@@ -956,7 +926,7 @@
                     <button class="btn btn-secondary" onclick="navigateTo('decks')">Decks</button>
                     <button class="btn btn-secondary" onclick="navigateTo('reports')">Reports</button>
                     <button class="btn btn-secondary" onclick="navigateTo('scoreboard')">Scoreboard</button>
-                    <button class="btn btn-secondary" id="admin-btn" onclick="navigateTo('admin')" style="display: none;">Admin</button>
+                    <button class="btn btn-secondary" id="admin-btn" onclick="navigateTo('admin')">Words</button>
                 </div>
         </nav>
 
@@ -1237,16 +1207,13 @@
         <!-- Admin Section -->
         <section id="admin-section" class="card hidden">
             <h2>Admin Panel</h2>
-            <div class="form-group">
-                <label for="admin-passcode">Admin Passcode</label>
-                <input type="password" id="admin-passcode" class="form-control" placeholder="Enter admin passcode">
-                <button class="btn btn-primary" onclick="checkAdminPasscode()" style="margin-top: 0.5rem;">Access Admin</button>
-            </div>
-            <div id="admin-content" style="display: none;">
+            <!-- Admin passcode removed in guest mode -->
+            <div id="admin-content" style="display: block;">
                 <h3>Data Management</h3>
                 <div style="display: flex; gap: 1rem; margin-bottom: 1rem; flex-wrap: wrap;">
                     <button class="btn btn-primary" onclick="exportData()">Export Data</button>
                     <button class="btn btn-warning" onclick="showImportModal()">Import Data</button>
+                    <button class="btn btn-success" onclick="reloadWordsFromCSV()">Reload from Words.csv</button>
                 </div>
 
                 <h3>Word Management</h3>
@@ -1319,7 +1286,7 @@
     </div>
 
     <script>
-        // Load xlsx library for Excel support
+        // Load required libraries
         function loadScript(src) {
             return new Promise((resolve, reject) => {
                 const script = document.createElement('script');
@@ -1330,25 +1297,41 @@
             });
         }
 
-        // Load xlsx library on page load
-        window.addEventListener('load', function() {
-            loadScript('https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.min.js')
-                .then(() => console.log('xlsx library loaded'))
-                .catch(() => console.log('xlsx library not available'));
-        });
+        // Bootstrap is handled by a single onload handler near the bottom
+        // to avoid duplicate initialization and race conditions.
 
         // Storage and Data Management
         class StorageManager {
             constructor() {
                 this.STORAGE_KEY = 'findTheWordApp';
                 this.WORDS_CSV_PATH = 'Words.csv';
+                // In-memory cache to avoid localStorage size limits
+                this.wordsCache = [];
+                // Ensure base data (profiles, empty arrays) exists immediately for login
+                this.ensureBaseData();
                 this.initData();
+            }
+
+            ensureBaseData() {
+                const existing = this.getAllData();
+                if (!existing || !Array.isArray(existing.profiles)) {
+                    const base = {
+                        words: [],
+                        profiles: [
+                            { id: 'admin', username: 'ssezen', role: 'admin', password: 'admin123', must_change_password: false },
+                            { id: 'user1', username: 'student1', role: 'user', password: 'pass123', must_change_password: false }
+                        ],
+                        game_sessions: [],
+                        attempts: []
+                    };
+                    this.saveAllData(base);
+                }
             }
 
             async initData() {
                 try {
                     console.log('Loading words from CSV...');
-                    const words = await this.loadWordsFromCSV();
+                    const words = await this.loadWordsFromCSV2();
 
                     if (words.length === 0) {
                         throw new Error('No words found in CSV file');
@@ -1356,7 +1339,12 @@
 
                     console.log(`Loaded ${words.length} words from CSV`);
 
+                    // Keep an in-memory cache of words as source of truth
+                    this.wordsCache = words;
+
                     const defaultData = {
+                        // Do not rely on localStorage for large word lists
+                        // We keep words in memory and persist only metadata
                         words: words,
                         profiles: [
                             { id: 'admin', username: 'ssezen', role: 'admin', password: 'admin123', must_change_password: false },
@@ -1366,8 +1354,21 @@
                         attempts: []
                     };
 
-                    // Always save fresh data from CSV
-                    this.saveAllData(defaultData);
+                    // Try to persist; if it exceeds quota, fall back to memory-only for words
+                    const saved = this.saveAllData(defaultData);
+                    if (!saved) {
+                        try {
+                            const minimal = { ...defaultData };
+                            delete minimal.words;
+                            this.saveAllData(minimal);
+                            console.warn('Words list too large for localStorage; using in-memory cache only');
+                        } catch (e) {
+                            console.error('Failed to persist minimal data:', e);
+                        }
+                    }
+
+                    // Notify listeners that words are ready
+                    document.dispatchEvent(new CustomEvent('words-data-loaded', { detail: { count: words.length } }));
                 } catch (error) {
                     console.error('Error loading CSV data:', error);
                     console.log('Using embedded fallback data instead');
@@ -1383,6 +1384,8 @@
                         { id: 7, level: 'A1-A2', word: 'across ', pos: 'prep', turkish: 'karşıdan karşıya', en_meaning: 'a preposition expressing relation in time, place, direction, or manner.', en_example: 'We discussed it at length, across reaching a final decision.' }
                     ];
 
+                    this.wordsCache = embeddedWords;
+
                     const defaultData = {
                         words: embeddedWords,
                         profiles: [
@@ -1394,93 +1397,174 @@
                     };
 
                     this.saveAllData(defaultData);
+
+                    document.dispatchEvent(new CustomEvent('words-data-loaded', { detail: { count: embeddedWords.length } }));
                 }
             }
 
-            async loadWordsFromCSV() {
+            // More robust CSV loader: avoid falling back unless fetch fails
+            async loadWordsFromCSV2() {
+                console.log('Loading Words.csv (v2)...');
+                let csvText = '';
+                
                 try {
-                    console.log('Loading Words.csv...');
                     const response = await fetch(this.WORDS_CSV_PATH);
-                    console.log('Fetch response:', response);
+                    console.log('Fetch response status:', response && response.status);
                     if (!response.ok) {
                         throw new Error(`HTTP error! status: ${response.status}`);
                     }
-                    const csvText = await response.text();
-                    console.log('CSV text received:', csvText);
-                    const parsedWords = this.parseCSV(csvText);
-                    console.log('Parsed words:', parsedWords);
-                    return parsedWords;
-                } catch (error) {
-                    console.error('Error loading Words.csv:', error);
-                    console.log('Using embedded fallback data instead');
-
-                    // Use embedded Words.csv data as fallback
-                    const embeddedCSV = `Id,Level,Word,Type,Turkish,English Meaning,English Example
-1,A1-A2,a ,det,bir,"indefinite article: before singular, countable nouns (consonant sound).","It's a useful habit if you practice it daily."
-2,A1-A2,about ,adv,hakkında,"in a manner related to 'about'.","They communicated about, which prevented a serious misunderstanding."
-3,A1-A2,about ,prep,"hakkında, ile ilgili; yaklaşık","a preposition expressing relation in time, place, direction, or manner.","We discussed it at length, about reaching a final decision."
-4,A1-A2,above ,adv,yukarıda,"in a manner related to 'above'.","If you proceed above, the risk will be minimal and easier to manage."
-5,A1-A2,above ,prep,üzerinde,"a preposition expressing relation in time, place, direction, or manner.","We discussed it at length, above reaching a final decision."
-6,A1-A2,across ,adv,karşıya,"in a manner related to 'across'.","The system now runs across after the latest patch."
-7,A1-A2,across ,prep,karşıdan karşıya,"a preposition expressing relation in time, place, direction, or manner.","We discussed it at length, across reaching a final decision."`;
-
+                    csvText = await response.text();
+                } catch (fetchError) {
+                    console.error('Fetch failed; using embedded fallback:', fetchError);
+                    const embeddedCSV = `Id,Level,Word,Type,Turkish,English Meaning,English Example\n1,A1-A2,a ,det,bir,"indefinite article: before singular, countable nouns (consonant sound).","It's a useful habit if you practice it daily."\n2,A1-A2,about ,adv,hakkinda,"in a manner related to 'about'.","They communicated about, which prevented a serious misunderstanding."\n3,A1-A2,about ,prep,"hakkinda, ile ilgili; yaklasik","a preposition expressing relation in time, place, direction, or manner.","We discussed it at length, about reaching a final decision."\n4,A1-A2,above ,adv,yukarida,"in a manner related to 'above'.","If you proceed above, the risk will be minimal and easier to manage."\n5,A1-A2,above ,prep,uzerinde,"a preposition expressing relation in time, place, direction, or manner.","We discussed it at length, above reaching a final decision."\n6,A1-A2,across ,adv,karsiya,"in a manner related to 'across'.","The system now runs across after the latest patch."\n7,A1-A2,across ,prep,karsidan karsiya,"a preposition expressing relation in time, place, direction, or manner.","We discussed it at length, across reaching a final decision."`;
                     return this.parseCSV(embeddedCSV);
+                }
+
+                // Parse; if parse fails, attempt naive parsing, but do not fallback to 7-sample silently
+                try {
+                    const parsedWords = this.parseCSV(csvText);
+                    console.log('Parsed words count:', parsedWords.length);
+                    return parsedWords;
+                } catch (parseError) {
+                    console.error('Parse error; attempting naive CSV parser:', parseError);
+                    try {
+                        const rows = csvText.split(/\r?\n/).slice(1).filter(Boolean);
+                        const words = rows.map((line, i) => {
+                            const parts = line.split(',');
+                            return {
+                                id: i + 1,
+                                level: (parts[1] || 'A1-A2').trim(),
+                                word: (parts[2] || '').trim(),
+                                pos: (parts[3] || '').trim(),
+                                turkish: (parts[4] || '').trim(),
+                                en_meaning: (parts[5] || '').trim(),
+                                en_example: (parts[6] || '').trim()
+                            };
+                        }).filter(w => w.word && w.turkish);
+                        console.warn('Naive CSV parser result count:', words.length);
+                        return words;
+                    } catch (_) {
+                        return [];
+                    }
                 }
             }
 
             parseCSV(csvText) {
-                const lines = csvText.trim().split('\n').filter(line => line.trim());
-                if (lines.length === 0) {
-                    return [];
-                }
+                // Detect delimiter: default ','; support ';'
+                const headerSample = (csvText || '').split(/\r?\n/)[0] || '';
+                const commaCount = (headerSample.match(/,/g) || []).length;
+                const semiCount = (headerSample.match(/;/g) || []).length;
+                const delimiter = semiCount > commaCount ? ';' : ',';
+
+                const rows = this.parseCSVRows(csvText, delimiter);
+                if (rows.length === 0) return [];
 
                 // Parse header row
-                const headers = this.parseCSVLine(lines[0]).map(h => h.trim().toLowerCase());
+                const headers = rows[0].map(h => h.trim());
+                const norm = (s) => this.normalizeHeader(s);
+                const headersNorm = headers.map(norm);
 
-            // Map expected headers to match CSV column headers
-            const headerMap = {
-                'id': headers.findIndex(h => h === 'id'),
-                'level': headers.findIndex(h => h === 'level'),
-                'word': headers.findIndex(h => h === 'word'),
-                'pos': headers.findIndex(h => h === 'type'), // 'Type' column maps to 'pos'
-                'turkish': headers.findIndex(h => h === 'turkish'),
-                'en_meaning': headers.findIndex(h => h === 'english meaning'),
-                'en_example': headers.findIndex(h => h === 'english example')
-            };
+                const findHeader = (candidates) => {
+                    for (const cand of candidates) {
+                        const idx = headersNorm.indexOf(norm(cand));
+                        if (idx !== -1) return idx;
+                    }
+                    return -1;
+                };
+
+                // Map expected headers to match CSV column headers
+                const headerMap = {
+                    id: findHeader(['id', '\ufeffid', '#', 'index']),
+                    level: findHeader(['level', 'seviye', 'cefr']),
+                    word: findHeader(['word', 'kelime']),
+                    pos: findHeader(['type', 'pos', 'part of speech', 'partofspeech']),
+                    turkish: findHeader(['turkish', 'türkçe', 'turkce', 'tr', 'turkish meaning', 'turkish translation', 'meaning (tr)', 'meaningtr', 'translationtr']),
+                    en_meaning: findHeader(['english meaning', 'meaning', 'definition', 'en meaning', 'english']),
+                    en_example: findHeader(['english example', 'example', 'sentence', 'en example'])
+                };
 
                 const words = [];
-
-                // Process data rows
-                for (let i = 1; i < lines.length; i++) {
+                for (let i = 1; i < rows.length; i++) {
+                    const values = rows[i];
                     try {
-                        const values = this.parseCSVLine(lines[i]);
-
-                        if (values.length >= 5) {
+                        if (values.length >= 3) {
+                            const get = (idx, def = '') => (idx >= 0 && idx < values.length ? values[idx] : def) || def;
                             const word = {
-                                id: parseInt(values[headerMap.id] !== -1 ? values[headerMap.id] : i) || i,
-                                level: (headerMap.level !== -1 ? values[headerMap.level] : 'A1-A2') || 'A1-A2',
-                                word: (headerMap.word !== -1 ? values[headerMap.word] : '') || '',
-                                pos: (headerMap.pos !== -1 ? values[headerMap.pos] : '') || '',
-                                turkish: (headerMap.turkish !== -1 ? values[headerMap.turkish] : '') || '',
-                                en_meaning: (headerMap.en_meaning !== -1 ? values[headerMap.en_meaning] : '') || '',
-                                en_example: (headerMap.en_example !== -1 ? values[headerMap.en_example] : '') || ''
+                                id: parseInt(get(headerMap.id, `${i}`)) || i,
+                                level: get(headerMap.level, 'A1-A2').trim(),
+                                word: get(headerMap.word, '').trim(),
+                                pos: get(headerMap.pos, '').trim(),
+                                turkish: get(headerMap.turkish, '').trim(),
+                                en_meaning: get(headerMap.en_meaning, '').trim(),
+                                en_example: get(headerMap.en_example, '').trim()
                             };
 
-                            // Validate required fields
                             if (word.word && word.turkish) {
                                 words.push(word);
-                            } else {
-                                console.warn(`Skipping row ${i + 1}: Missing required fields (word or turkish)`);
                             }
-                        } else {
-                            console.warn(`Skipping row ${i + 1}: Insufficient columns (${values.length})`);
                         }
                     } catch (error) {
                         console.error(`Error processing row ${i + 1}:`, error);
                     }
                 }
-
                 return words;
+            }
+
+            // Robust CSV row parser that handles quoted commas and newlines
+            parseCSVRows(text, delimiter = ',') {
+                const rows = [];
+                let row = [];
+                let cur = '';
+                let inQuotes = false;
+                for (let i = 0; i < text.length; i++) {
+                    const ch = text[i];
+                    if (ch === '"') {
+                        if (inQuotes && text[i + 1] === '"') {
+                            cur += '"';
+                            i++;
+                        } else {
+                            inQuotes = !inQuotes;
+                        }
+                    } else if (ch === delimiter && !inQuotes) {
+                        row.push(cur);
+                        cur = '';
+                    } else if ((ch === '\n' || ch === '\r') && !inQuotes) {
+                        // Handle CRLF
+                        if (ch === '\r' && text[i + 1] === '\n') i++;
+                        row.push(cur);
+                        rows.push(row.map(cell => cell.trim()));
+                        row = [];
+                        cur = '';
+                    } else {
+                        cur += ch;
+                    }
+                }
+                if (cur.length > 0 || row.length > 0) {
+                    row.push(cur);
+                    rows.push(row.map(cell => cell.trim()));
+                }
+                // Unquote and unescape double quotes
+                return rows
+                    .filter(r => r.some(c => c !== ''))
+                    .map(r => r.map(field => {
+                        if (field.startsWith('"') && field.endsWith('"')) {
+                            return field.slice(1, -1).replace(/""/g, '"');
+                        }
+                        return field;
+                    }));
+            }
+
+            normalizeHeader(s) {
+                try {
+                    return s
+                        .toString()
+                        .normalize('NFD')
+                        .replace(/[\u0300-\u036f]/g, '') // strip diacritics
+                        .toLowerCase()
+                        .replace(/[^a-z0-9]+/g, '');
+                } catch (_) {
+                    return String(s).toLowerCase().replace(/[^a-z0-9]+/g, '');
+                }
             }
 
             parseCSVLine(line) {
@@ -1552,8 +1636,11 @@
             }
 
             getWords() {
+                if (this.wordsCache && this.wordsCache.length > 0) {
+                    return this.wordsCache;
+                }
                 const data = this.getAllData();
-                return data ? data.words : [];
+                return (data && Array.isArray(data.words)) ? data.words : [];
             }
 
             getProfiles() {
@@ -1572,28 +1659,48 @@
             }
 
             addWord(word) {
-                const data = this.getAllData();
                 const newWord = { ...word, id: Date.now() };
+                // Update memory cache first
+                if (Array.isArray(this.wordsCache)) {
+                    this.wordsCache.push(newWord);
+                }
+                // Best-effort persist if possible
+                const data = this.getAllData() || {};
+                if (!Array.isArray(data.words)) data.words = [];
                 data.words.push(newWord);
                 this.saveAllData(data);
                 return newWord;
             }
 
             updateWord(id, updates) {
-                const data = this.getAllData();
-                const wordIndex = data.words.findIndex(w => w.id === id);
-                if (wordIndex !== -1) {
-                    data.words[wordIndex] = { ...data.words[wordIndex], ...updates };
+                // Update memory cache
+                const cacheIdx = Array.isArray(this.wordsCache) ? this.wordsCache.findIndex(w => w.id === id) : -1;
+                if (cacheIdx !== -1) {
+                    this.wordsCache[cacheIdx] = { ...this.wordsCache[cacheIdx], ...updates };
+                }
+                // Best-effort persist
+                const data = this.getAllData() || {};
+                if (!Array.isArray(data.words)) data.words = [];
+                const idx = data.words.findIndex(w => w.id === id);
+                if (idx !== -1) {
+                    data.words[idx] = { ...data.words[idx], ...updates };
                     this.saveAllData(data);
-                    return data.words[wordIndex];
+                    return data.words[idx];
                 }
                 return null;
             }
 
             deleteWord(id) {
-                const data = this.getAllData();
-                data.words = data.words.filter(w => w.id !== id);
-                this.saveAllData(data);
+                // Update memory cache
+                if (Array.isArray(this.wordsCache)) {
+                    this.wordsCache = this.wordsCache.filter(w => w.id !== id);
+                }
+                // Best-effort persist
+                const data = this.getAllData() || {};
+                if (Array.isArray(data.words)) {
+                    data.words = data.words.filter(w => w.id !== id);
+                    this.saveAllData(data);
+                }
             }
 
             addGameSession(session) {
@@ -1863,57 +1970,414 @@
         }
 
         // Global variables
-        const storage = new StorageManager();
+        let supabaseClient = null;
+        let storage = null;
         const gameEngine = new FindTheWordEngine(storage);
         let currentUser = null;
         let currentGameMode = 'find-the-word';
 
+        // Supabase Configuration
+        const SUPABASE_CONFIG = {
+            url: 'YOUR_SUPABASE_URL', // Replace with your Supabase URL
+            anonKey: 'YOUR_SUPABASE_ANON_KEY', // Replace with your Supabase anon key
+            useLocalStorage: true // Set to false to use Supabase, true for localStorage fallback
+        };
+
+        // Initialize Supabase
+        function initializeSupabase() {
+            if (!SUPABASE_CONFIG.useLocalStorage && SUPABASE_CONFIG.url !== 'YOUR_SUPABASE_URL') {
+                try {
+                    supabaseClient = window.supabase.createClient(
+                        SUPABASE_CONFIG.url,
+                        SUPABASE_CONFIG.anonKey
+                    );
+                    storage = new SupabaseStorageManager(supabaseClient);
+                    console.log('Supabase client initialized');
+                } catch (error) {
+                    console.error('Failed to initialize Supabase:', error);
+                    initializeLocalStorage();
+                }
+            } else {
+                initializeLocalStorage();
+            }
+        }
+
+        // Fallback to localStorage
+        function initializeLocalStorage() {
+            console.log('Using localStorage fallback');
+            storage = new StorageManager();
+            gameEngine.storage = storage;
+        }
+
+        // Supabase Storage Manager Class
+        class SupabaseStorageManager {
+            constructor(supabaseClient) {
+                this.supabase = supabaseClient;
+                this.WORDS_CSV_PATH = 'Words.csv';
+                this.initData();
+            }
+
+            async initData() {
+                try {
+                    console.log('Loading words from CSV for Supabase...');
+                    const words = await this.loadWordsFromCSV();
+
+                    if (words.length === 0) {
+                        throw new Error('No words found in CSV file');
+                    }
+
+                    console.log(`Loaded ${words.length} words from CSV for Supabase`);
+
+                    // Store words in a global variable for now (in production, you'd store in Supabase)
+                    window.supabaseWords = words;
+                } catch (error) {
+                    console.error('Error loading CSV data for Supabase:', error);
+                    console.log('Using embedded fallback data instead');
+                    window.supabaseWords = this.getEmbeddedWords();
+                }
+            }
+
+            getEmbeddedWords() {
+                return [
+                    { id: 1, level: 'A1-A2', word: 'a ', pos: 'det', turkish: 'bir', en_meaning: 'indefinite article: before singular, countable nouns (consonant sound).', en_example: 'It\'s a useful habit if you practice it daily.' },
+                    { id: 2, level: 'A1-A2', word: 'about ', pos: 'adv', turkish: 'hakkında', en_meaning: 'in a manner related to \'about\'.', en_example: 'They communicated about, which prevented a serious misunderstanding.' },
+                    { id: 3, level: 'A1-A2', word: 'about ', pos: 'prep', turkish: ' hakkında, ile ilgili; yaklaşık', en_meaning: 'a preposition expressing relation in time, place, direction, or manner.', en_example: 'We discussed it at length, about reaching a final decision.' },
+                    { id: 4, level: 'A1-A2', word: 'above ', pos: 'adv', turkish: 'yukarıda', en_meaning: 'in a manner related to \'above\'.', en_example: 'If you proceed above, the risk will be minimal and easier to manage.' },
+                    { id: 5, level: 'A1-A2', word: 'above ', pos: 'prep', turkish: 'üzerinde', en_meaning: 'a preposition expressing relation in time, place, direction, or manner.', en_example: 'We discussed it at length, above reaching a final decision.' },
+                    { id: 6, level: 'A1-A2', word: 'across ', pos: 'adv', turkish: 'karşıya', en_meaning: 'in a manner related to \'across\'.', en_example: 'The system now runs across after the latest patch.' },
+                    { id: 7, level: 'A1-A2', word: 'across ', pos: 'prep', turkish: 'karşıdan karşıya', en_meaning: 'a preposition expressing relation in time, place, direction, or manner.', en_example: 'We discussed it at length, across reaching a final decision.' }
+                ];
+            }
+
+            async loadWordsFromCSV() {
+                try {
+                    console.log('Loading Words.csv for Supabase...');
+                    const response = await fetch(this.WORDS_CSV_PATH);
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    const csvText = await response.text();
+                    const parsedWords = this.parseCSV(csvText);
+                    return parsedWords;
+                } catch (error) {
+                    console.error('Error loading Words.csv for Supabase:', error);
+                    return this.getEmbeddedWords();
+                }
+            }
+
+            parseCSV(csvText) {
+                const lines = csvText.trim().split('\n').filter(line => line.trim());
+                if (lines.length === 0) return [];
+
+                const headers = this.parseCSVLine(lines[0]).map(h => h.trim().toLowerCase());
+                const headerMap = {
+                    'id': headers.findIndex(h => h === 'id'),
+                    'level': headers.findIndex(h => h === 'level'),
+                    'word': headers.findIndex(h => h === 'word'),
+                    'pos': headers.findIndex(h => h === 'type'),
+                    'turkish': headers.findIndex(h => h === 'turkish'),
+                    'en_meaning': headers.findIndex(h => h === 'english meaning'),
+                    'en_example': headers.findIndex(h => h === 'english example')
+                };
+
+                const words = [];
+                for (let i = 1; i < lines.length; i++) {
+                    try {
+                        const values = this.parseCSVLine(lines[i]);
+                        if (values.length >= 5) {
+                            const word = {
+                                id: parseInt(values[headerMap.id] !== -1 ? values[headerMap.id] : i) || i,
+                                level: (headerMap.level !== -1 ? values[headerMap.level] : 'A1-A2') || 'A1-A2',
+                                word: (headerMap.word !== -1 ? values[headerMap.word] : '') || '',
+                                pos: (headerMap.pos !== -1 ? values[headerMap.pos] : '') || '',
+                                turkish: (headerMap.turkish !== -1 ? values[headerMap.turkish] : '') || '',
+                                en_meaning: (headerMap.en_meaning !== -1 ? values[headerMap.en_meaning] : '') || '',
+                                en_example: (headerMap.en_example !== -1 ? values[headerMap.en_example] : '') || ''
+                            };
+
+                            if (word.word && word.turkish) {
+                                words.push(word);
+                            }
+                        }
+                    } catch (error) {
+                        console.error(`Error processing row ${i + 1}:`, error);
+                    }
+                }
+                return words;
+            }
+
+            parseCSVLine(line) {
+                const result = [];
+                let current = '';
+                let inQuotes = false;
+                let i = 0;
+
+                while (i < line.length) {
+                    const char = line[i];
+                    if (char === '"') {
+                        if (inQuotes && line[i + 1] === '"') {
+                            current += '"';
+                            i += 2;
+                        } else {
+                            inQuotes = !inQuotes;
+                            i++;
+                        }
+                    } else if (char === ',' && !inQuotes) {
+                        result.push(current.trim());
+                        current = '';
+                        i++;
+                    } else {
+                        current += char;
+                        i++;
+                    }
+                }
+
+                result.push(current.trim());
+                return result.map(field => {
+                    if (field.startsWith('"') && field.endsWith('"')) {
+                        return field.slice(1, -1).replace(/""/g, '"');
+                    }
+                    return field;
+                });
+            }
+
+            // Supabase data methods
+            async getWords() {
+                if (window.supabaseWords) {
+                    return window.supabaseWords;
+                }
+
+                try {
+                    const { data, error } = await this.supabase
+                        .from('words')
+                        .select('*')
+                        .order('id');
+
+                    if (error) throw error;
+                    return data || [];
+                } catch (error) {
+                    console.error('Error fetching words from Supabase:', error);
+                    return this.getEmbeddedWords();
+                }
+            }
+
+            async getProfiles() {
+                try {
+                    const { data, error } = await this.supabase
+                        .from('profiles')
+                        .select('*');
+
+                    if (error) throw error;
+                    return data || [];
+                } catch (error) {
+                    console.error('Error fetching profiles from Supabase:', error);
+                    // Return default profiles if Supabase fails
+                    return [
+                        { id: 'admin', username: 'ssezen', role: 'admin', password: 'admin123', must_change_password: false },
+                        { id: 'user1', username: 'student1', role: 'user', password: 'pass123', must_change_password: false }
+                    ];
+                }
+            }
+
+            async getGameSessions() {
+                try {
+                    const { data, error } = await this.supabase
+                        .from('game_sessions')
+                        .select('*')
+                        .order('started_at', { ascending: false });
+
+                    if (error) throw error;
+                    return data || [];
+                } catch (error) {
+                    console.error('Error fetching game sessions from Supabase:', error);
+                    return [];
+                }
+            }
+
+            async getAttempts() {
+                try {
+                    const { data, error } = await this.supabase
+                        .from('attempts')
+                        .select('*')
+                        .order('answered_at', { ascending: false });
+
+                    if (error) throw error;
+                    return data || [];
+                } catch (error) {
+                    console.error('Error fetching attempts from Supabase:', error);
+                    return [];
+                }
+            }
+
+            async addWord(word) {
+                try {
+                    const { data, error } = await this.supabase
+                        .from('words')
+                        .insert([word])
+                        .select()
+                        .single();
+
+                    if (error) throw error;
+                    return data;
+                } catch (error) {
+                    console.error('Error adding word to Supabase:', error);
+                    // Fallback to local storage if Supabase fails
+                    const localStorage = new StorageManager();
+                    return localStorage.addWord(word);
+                }
+            }
+
+            async addGameSession(session) {
+                try {
+                    const { data, error } = await this.supabase
+                        .from('game_sessions')
+                        .insert([session])
+                        .select()
+                        .single();
+
+                    if (error) throw error;
+                    return data;
+                } catch (error) {
+                    console.error('Error adding game session to Supabase:', error);
+                    // Fallback to local storage if Supabase fails
+                    const localStorage = new StorageManager();
+                    return localStorage.addGameSession(session);
+                }
+            }
+
+            async addAttempt(attempt) {
+                try {
+                    const { data, error } = await this.supabase
+                        .from('attempts')
+                        .insert([attempt])
+                        .select()
+                        .single();
+
+                    if (error) throw error;
+                    return data;
+                } catch (error) {
+                    console.error('Error adding attempt to Supabase:', error);
+                    // Fallback to local storage if Supabase fails
+                    const localStorage = new StorageManager();
+                    return localStorage.addAttempt(attempt);
+                }
+            }
+
+            async updateGameSession(id, updates) {
+                try {
+                    const { data, error } = await this.supabase
+                        .from('game_sessions')
+                        .update(updates)
+                        .eq('id', id)
+                        .select()
+                        .single();
+
+                    if (error) throw error;
+                    return data;
+                } catch (error) {
+                    console.error('Error updating game session in Supabase:', error);
+                    // Fallback to local storage if Supabase fails
+                    const localStorage = new StorageManager();
+                    return localStorage.updateGameSession(id, updates);
+                }
+            }
+
+            // Real-time subscription methods
+            subscribeToWords(callback) {
+                return this.supabase
+                    .channel('words-changes')
+                    .on('postgres_changes', { event: '*', schema: 'public', table: 'words' }, callback)
+                    .subscribe();
+            }
+
+            subscribeToGameSessions(callback) {
+                return this.supabase
+                    .channel('game-sessions-changes')
+                    .on('postgres_changes', { event: '*', schema: 'public', table: 'game_sessions' }, callback)
+                    .subscribe();
+            }
+
+            // Export/Import methods
+            exportData() {
+                // This would export data from Supabase
+                alert('Export from Supabase not yet implemented. Use localStorage fallback for now.');
+            }
+
+            importData(jsonString) {
+                // This would import data to Supabase
+                alert('Import to Supabase not yet implemented. Use localStorage fallback for now.');
+                return false;
+            }
+        }
+
         // Navigation
         function navigateTo(section) {
-            // Hide all sections
-            document.getElementById('login-section').classList.add('hidden');
-            document.getElementById('password-change-section').classList.add('hidden');
-            document.getElementById('nav-section').classList.add('hidden');
-            document.getElementById('game-modes-section').classList.add('hidden');
-            document.getElementById('game-section').classList.add('hidden');
-            document.getElementById('decks-section').classList.add('hidden');
-            document.getElementById('reports-section').classList.add('hidden');
-            document.getElementById('scoreboard-section').classList.add('hidden');
-            document.getElementById('admin-section').classList.add('hidden');
+            // Hide all sections (guard missing elements)
+            const hide = (id) => { const el = document.getElementById(id); if (el) el.classList.add('hidden'); };
+            hide('login-section');
+            hide('password-change-section');
+            hide('nav-section');
+            hide('game-modes-section');
+            hide('game-section');
+            hide('decks-section');
+            hide('reports-section');
+            hide('scoreboard-section');
+            hide('admin-section');
 
             // Show requested section and load data
             switch (section) {
-                case 'login':
-                    document.getElementById('login-section').classList.remove('hidden');
+                case 'login': {
+                    const el = document.getElementById('login-section');
+                    if (el) el.classList.remove('hidden');
                     break;
-                case 'game-modes':
-                    document.getElementById('nav-section').classList.remove('hidden');
-                    document.getElementById('game-modes-section').classList.remove('hidden');
+                }
+                case 'game-modes': {
+                    const nav = document.getElementById('nav-section');
+                    const s = document.getElementById('game-modes-section');
+                    if (nav) nav.classList.remove('hidden');
+                    if (s) s.classList.remove('hidden');
                     break;
-                case 'game':
-                    document.getElementById('nav-section').classList.remove('hidden');
-                    document.getElementById('game-section').classList.remove('hidden');
+                }
+                case 'game': {
+                    const nav = document.getElementById('nav-section');
+                    const s = document.getElementById('game-section');
+                    if (nav) nav.classList.remove('hidden');
+                    if (s) s.classList.remove('hidden');
                     loadGameSettings();
                     break;
-                case 'decks':
-                    document.getElementById('nav-section').classList.remove('hidden');
-                    document.getElementById('decks-section').classList.remove('hidden');
+                }
+                case 'decks': {
+                    const nav = document.getElementById('nav-section');
+                    const s = document.getElementById('decks-section');
+                    if (nav) nav.classList.remove('hidden');
+                    if (s) s.classList.remove('hidden');
                     loadDecks();
                     break;
-                case 'reports':
-                    document.getElementById('nav-section').classList.remove('hidden');
-                    document.getElementById('reports-section').classList.remove('hidden');
+                }
+                case 'reports': {
+                    const nav = document.getElementById('nav-section');
+                    const s = document.getElementById('reports-section');
+                    if (nav) nav.classList.remove('hidden');
+                    if (s) s.classList.remove('hidden');
                     loadReports();
                     break;
-                case 'scoreboard':
-                    document.getElementById('nav-section').classList.remove('hidden');
-                    document.getElementById('scoreboard-section').classList.remove('hidden');
+                }
+                case 'scoreboard': {
+                    const nav = document.getElementById('nav-section');
+                    const s = document.getElementById('scoreboard-section');
+                    if (nav) nav.classList.remove('hidden');
+                    if (s) s.classList.remove('hidden');
                     loadScoreboard();
                     break;
-                case 'admin':
-                    document.getElementById('nav-section').classList.remove('hidden');
-                    document.getElementById('admin-section').classList.remove('hidden');
+                }
+                case 'admin': {
+                    const nav = document.getElementById('nav-section');
+                    const s = document.getElementById('admin-section');
+                    if (nav) nav.classList.remove('hidden');
+                    if (s) s.classList.remove('hidden');
+                    try { if (typeof loadWordsTable === 'function') loadWordsTable(); } catch (_) {}
                     break;
+                }
             }
         }
 
@@ -1987,13 +2451,22 @@
             }
         }
 
-        // Authentication
-        document.getElementById('login-form').addEventListener('submit', function(e) {
+        // Authentication (disabled): guard missing login form
+        const loginForm = document.getElementById('login-form');
+        if (loginForm) loginForm.addEventListener('submit', function(e) {
             e.preventDefault();
             const username = document.getElementById('username').value;
             const password = document.getElementById('password').value;
 
-            const profiles = storage.getProfiles();
+            let profiles = [];
+            try { profiles = storage && storage.getProfiles ? storage.getProfiles() : []; } catch (_) { profiles = []; }
+            if (!profiles || profiles.length === 0) {
+                profiles = [
+                    { id: 'admin', username: 'ssezen', role: 'admin', password: 'admin123', must_change_password: false },
+                    { id: 'user1', username: 'student1', role: 'user', password: 'pass123', must_change_password: false }
+                ];
+            }
+
             const user = profiles.find(p => p.username === username && p.password === password);
 
             if (user) {
@@ -2001,9 +2474,7 @@
                 document.getElementById('current-user').textContent = user.username;
                 document.getElementById('logout-btn').style.display = 'inline-block';
 
-                if (user.role === 'admin') {
-                    document.getElementById('admin-btn').style.display = 'inline-block';
-                }
+                // Admin button is always visible in guest mode
 
                 if (user.must_change_password) {
                     document.getElementById('password-change-section').classList.remove('hidden');
@@ -2015,7 +2486,8 @@
             }
         });
 
-        document.getElementById('password-change-form').addEventListener('submit', function(e) {
+        const passwordChangeForm = document.getElementById('password-change-form');
+        if (passwordChangeForm) passwordChangeForm.addEventListener('submit', function(e) {
             e.preventDefault();
             const newPassword = document.getElementById('new-password').value;
             const confirmPassword = document.getElementById('confirm-password').value;
@@ -2036,12 +2508,27 @@
             }
         });
 
+        // Default user helper for guest mode
+        function getDefaultUser() {
+            try {
+                const profiles = storage && storage.getProfiles ? storage.getProfiles() : [];
+                return (
+                    profiles.find(p => p.username === 'student1') ||
+                    profiles.find(p => p.role === 'user') ||
+                    profiles[0] ||
+                    { id: 'guest', username: 'Guest', role: 'user' }
+                );
+            } catch (_) {
+                return { id: 'guest', username: 'Guest', role: 'user' };
+            }
+        }
+
         document.getElementById('logout-btn').addEventListener('click', function() {
-            currentUser = null;
-            document.getElementById('current-user').textContent = 'Not logged in';
+            currentUser = getDefaultUser();
+            const cu = document.getElementById('current-user');
+            if (cu) cu.textContent = currentUser.username || 'Guest';
             document.getElementById('logout-btn').style.display = 'none';
-            document.getElementById('admin-btn').style.display = 'none';
-            navigateTo('login');
+            navigateTo('game-modes');
         });
 
         // Game Functions
@@ -3424,12 +3911,7 @@
             activityContainer.insertAdjacentHTML('afterend', performanceHTML);
         }
 
-        // Initialize additional sections
-        window.addEventListener('load', function() {
-            // Add navigation to reports and decks sections
-            loadDecks();
-            loadReports();
-        });
+        // Additional sections will be initialized in the main onload handler
 
         // Admin Functions
         function checkAdminPasscode() {
@@ -3441,6 +3923,14 @@
                 alert('Invalid admin passcode');
             }
         }
+
+        // If words load finishes after admin panel is opened, refresh the table
+        document.addEventListener('words-data-loaded', () => {
+            const adminContent = document.getElementById('admin-content');
+            if (adminContent && adminContent.style.display !== 'none') {
+                try { loadWordsTable(); } catch (e) { /* ignore */ }
+            }
+        });
 
         function loadWordsTable() {
             const words = storage.getWords();
@@ -3690,7 +4180,7 @@
         });
 
         // Initialize
-        document.getElementById('password-change-section').classList.add('hidden');
+        (function(){ const pcs = document.getElementById('password-change-section'); if (pcs) pcs.classList.add('hidden'); })();
 
         // Debug function to test navigation
         function debugNavigation() {
@@ -3743,16 +4233,17 @@
 
         // Navigation
         function navigateTo(section) {
-            // Hide all sections
-            document.getElementById('login-section').classList.add('hidden');
-            document.getElementById('password-change-section').classList.add('hidden');
-            document.getElementById('nav-section').classList.add('hidden');
-            document.getElementById('game-modes-section').classList.add('hidden');
-            document.getElementById('game-section').classList.add('hidden');
-            document.getElementById('decks-section').classList.add('hidden');
-            document.getElementById('reports-section').classList.add('hidden');
-            document.getElementById('scoreboard-section').classList.add('hidden');
-            document.getElementById('admin-section').classList.add('hidden');
+            // Hide all sections (guard missing elements)
+            const hide = (id) => { const el = document.getElementById(id); if (el) el.classList.add('hidden'); };
+            hide('login-section');
+            hide('password-change-section');
+            hide('nav-section');
+            hide('game-modes-section');
+            hide('game-section');
+            hide('decks-section');
+            hide('reports-section');
+            hide('scoreboard-section');
+            hide('admin-section');
 
             // 🔥 Aktif buton yönetimi
             document.querySelectorAll('#nav-section button').forEach(btn => {
@@ -3770,9 +4261,11 @@
 
             // Show requested section and load data
             switch (section) {
-                case 'login':
-                    document.getElementById('login-section').classList.remove('hidden');
+                case 'login': {
+                    const el = document.getElementById('login-section');
+                    if (el) el.classList.remove('hidden');
                     break;
+                }
                 case 'game-modes':
                     document.getElementById('nav-section').classList.remove('hidden');
                     document.getElementById('game-modes-section').classList.remove('hidden');
@@ -3800,19 +4293,38 @@
                 case 'admin':
                     document.getElementById('nav-section').classList.remove('hidden');
                     document.getElementById('admin-section').classList.remove('hidden');
+                    try { if (typeof loadWordsTable === 'function') loadWordsTable(); } catch (_) {}
+                    break;
+                case 'admin':
+                    document.getElementById('nav-section').classList.remove('hidden');
+                    document.getElementById('admin-section').classList.remove('hidden');
                     break;
             }
         }
 
-        // Initialize theme on page load and storage asynchronously
+        // Single bootstrap handler: initialize storage, theme, and UI
         window.addEventListener('load', async function() {
-            console.log('Page loaded, initializing storage...');
-            await initializeStorage();
-            console.log('Storage initialized, setting up UI...');
-            initTheme();
-            loadDecks();
-            loadReports();
-            console.log('Application fully loaded and ready!');
+            try {
+                console.log('Page loaded, bootstrapping...');
+                // Ensure storage is ready and CSV is loaded
+                initializeLocalStorage();
+                // Set default user for guest mode
+                currentUser = (typeof getDefaultUser === 'function') ? getDefaultUser() : { id: 'guest', username: 'Guest', role: 'user' };
+                const cu = document.getElementById('current-user');
+                if (cu) cu.textContent = currentUser.username || 'Guest';
+                // Theme
+                initTheme();
+                const themeToggle = document.getElementById('theme-toggle');
+                if (themeToggle && !themeToggle._bound) { themeToggle.addEventListener('click', toggleTheme); themeToggle._bound = true; }
+                // Initial route
+                navigateTo('game-modes');
+                // Populate auxiliary sections
+                loadDecks();
+                loadReports();
+                console.log('Bootstrap complete');
+            } catch (e) {
+                console.error('Bootstrap error:', e);
+            }
         });
 
         // Add theme toggle event listener
@@ -3826,8 +4338,14 @@
         // Reload Words from CSV Function
         async function reloadWordsFromCSV() {
             try {
-                const csvData = await storage.loadWordsFromCSV();
-                storage.updateData({ words: csvData });
+                const csvData = await storage.loadWordsFromCSV2 ? storage.loadWordsFromCSV2() : storage.loadWordsFromCSV();
+                // Update memory cache immediately
+                storage.wordsCache = csvData;
+                // Best-effort persist
+                const ok = storage.updateData({ words: csvData });
+                if (!ok) {
+                    console.warn('Could not persist words to localStorage; using in-memory cache');
+                }
                 alert('Words reloaded from CSV successfully! The page will refresh to apply changes.');
                 location.reload();
             } catch (error) {
@@ -3989,7 +4507,7 @@
             console.log('Storage initialized');
         }
 
-        navigateTo('login');
+        navigateTo('game-modes');
     </script>
 </body>
 </html>
